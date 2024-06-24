@@ -1,0 +1,7 @@
+{
+    "rust-analyzer.cargo.allTargets": false,
+    "rust-analyzer.cargo.target": "thumbv6m-none-eabi",
+    "rust-analyzer.procMacro.ignored": {
+        "rp2040_hal_macros": ["entry"],
+    }
+}

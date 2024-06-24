@@ -1,0 +1,18 @@
+[package]
+name = "mcp2518fd"
+version = "0.1.0"
+authors = ["Adrian Wowk <adrian@adom.inc>"]
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+bitfield = "0.15"
+concat-idents = "1.1.5"
+defmt = { version = "0.3", optional = true }
+embedded-can = "0.4.1"
+embedded-hal = "1.0.0"
+num_enum = { version = "0.7.2", default-features = false }
+
+[features]
+
+defmt = ["dep:defmt"]
