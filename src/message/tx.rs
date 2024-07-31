@@ -1,5 +1,5 @@
 use bitfield::bitfield;
-use embedded_can::{Id, StandardId};
+use embedded_can::Id;
 
 use super::{dlc_for_len, len_for_dlc, HEADER_SIZE_DWORDS, MAX_FD_BUFFER_SIZE};
 
@@ -55,7 +55,7 @@ impl TxMessage {
             }
             Id::Extended(id) => {
                 header.set_sid(id.standard_id().as_raw());
-                header.set_eid(id.as_raw() & ((!StandardId::MAX.as_raw() as u32) >> 11));
+                header.set_eid(id.as_raw() & 0x3FFFF);
                 header.set_ide(true);
             }
         }
