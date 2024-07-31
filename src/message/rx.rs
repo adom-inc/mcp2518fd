@@ -1,4 +1,5 @@
 use bitfield::bitfield;
+use embedded_can::{ExtendedId, Id, StandardId};
 
 use crate::memory::controller::filter::FilterNumber;
 
@@ -80,6 +81,17 @@ impl RxMessage {
     /// Gets the message timestamp if the FIFO was configured to include one
     pub fn timestamp(&self) -> Option<u32> {
         self.timestamp
+    }
+
+    /// Constructs the message ID from the frame header
+    pub fn id(&self) -> Id {
+        if self.header.ide() {
+            Id::Extended(
+                ExtendedId::new(((self.header.sid() as u32) << 18) | self.header.eid()).unwrap(),
+            )
+        } else {
+            Id::Standard(StandardId::new(self.header.sid()).unwrap())
+        }
     }
 
     /// Creates a slice over the data associated with this message with the
