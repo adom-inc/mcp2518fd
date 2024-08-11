@@ -43,6 +43,10 @@ pub enum Error {
     SPIWrite,
     /// Attempted to access an invalid RAM address
     InvalidRamAddress(u16),
+    /// Tried to read data from ram that was not a multiple of 4 bytes
+    InvalidReadLength(usize),
+    /// Tried to write data to ram that was not a multiple of 4 bytes
+    InvalidWriteLength(usize),
     /// Tried to transmit a message through the TXQ, but the TXQ is not enabled
     TxQueueDisabled,
     /// Tried to transmit a message with a FIFO not configured for transmission
@@ -501,7 +505,16 @@ where
 
         let (length, bytes) = message.as_bytes();
 
-        self.write_ram(ram_address as u16, &bytes[..length])?;
+        // We need to make sure that the data we are writing to ram has a length
+        // which is a multiple of 4. By adding (4 - length % 4), we extend the
+        // length to the next multiple 4 boundary. This isn't always a good
+        // solution but in this specific case it works because we know that the
+        // there is definitely at least that much ram allocated for the TX
+        // message (we only do this when the DLC is < 8 and the minimum number
+        // of bytes allocated for a TX message is 8)
+        let data = &bytes[..length + (4 - length % 4)];
+
+        self.write_ram(ram_address as u16, data)?;
 
         /* Increment tail pointer but do NOT request trnsmission */
 
@@ -967,6 +980,10 @@ where
             .then_some(())
             .ok_or(Error::InvalidRamAddress(address))?;
 
+        if data.len() % 4 != 0 {
+            return Err(Error::InvalidReadLength(data.len()));
+        }
+
         self.ready_slave_select();
 
         let mut instruction = Instruction(OpCode::READ);
@@ -990,6 +1007,10 @@ where
         is_valid_ram_address(address as u32, data.len())
             .then_some(())
             .ok_or(Error::InvalidRamAddress(address))?;
+
+        if data.len() % 4 != 0 {
+            return Err(Error::InvalidWriteLength(data.len()));
+        }
 
         self.ready_slave_select();
 
