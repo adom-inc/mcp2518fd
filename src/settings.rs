@@ -173,6 +173,9 @@ pub struct Settings {
     pub tx_queue: Option<TxQueueConfiguration>,
     pub enable_time_based_counter: bool,
     pub data_bits_to_match: Option<DataBits>,
+    pub enable_can_error_interrupts: bool,
+    pub enable_spi_error_interrupt: bool,
+    pub enable_ecc_error_interrupt: bool,
 }
 
 #[derive(Debug)]

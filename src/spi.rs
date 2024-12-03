@@ -160,6 +160,21 @@ where
         self.modify_register(|mut ciint: InterruptRegister| {
             ciint.set_rxie(true);
             ciint.set_txie(true);
+
+            if settings.enable_can_error_interrupts {
+                ciint.set_ivmie(true);
+                ciint.set_cerrie(true);
+                ciint.set_serrie(true);
+            }
+
+            if settings.enable_spi_error_interrupt {
+                ciint.set_spicrcie(true);
+            }
+
+            if settings.enable_ecc_error_interrupt {
+                ciint.set_eccie(true);
+            }
+
             ciint
         })?;
 

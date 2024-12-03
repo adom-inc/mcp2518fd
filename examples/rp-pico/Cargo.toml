@@ -9,8 +9,8 @@ license = "MIT OR Apache-2.0"
 mcp2518fd = { path = "../../", features = ["defmt"] }
 
 cortex-m = "0.7"
-cortex-m-rt = "0.7"
-defmt = "0.3"
+cortex-m-rt = "0.7.5"
+defmt = "0.3.10"
 defmt-rtt = "0.4"
 embedded-can = "0.4.1"
 embedded-hal = { version = "1.0.0" }

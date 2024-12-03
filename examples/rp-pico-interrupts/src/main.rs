@@ -130,6 +130,12 @@ fn main() -> ! {
                 enable_time_based_counter: true,
                 // Do not filter by any data bits
                 data_bits_to_match: None,
+                // Do not interrupt on CAN bus errors
+                enable_can_error_interrupts: false,
+                // Do not interrupt on SPI comms errors
+                enable_spi_error_interrupt: false,
+                // Do not interrupt on RAM ECC errors
+                enable_ecc_error_interrupt: false,
             },
             &mut timer,
         )
