@@ -34,14 +34,14 @@ pub struct TxMessage {
 
 impl TxMessage {
     pub fn new_fd(identifier: Id, data: &[u8]) -> Option<Self> {
-        Self::new(identifier, data, true)
+        Self::new_with_data(identifier, data, true)
     }
 
     pub fn new_2_0(identifier: Id, data: &[u8]) -> Option<Self> {
-        Self::new(identifier, data, false)
+        Self::new_with_data(identifier, data, false)
     }
 
-    fn new(identifier: Id, data: &[u8], is_fd: bool) -> Option<Self> {
+    fn new_with_data(identifier: Id, data: &[u8], is_fd: bool) -> Option<Self> {
         let mut header = TxHeader([0u32; HEADER_SIZE_DWORDS]);
 
         let dlc = dlc_for_len(data.len(), is_fd)?;
@@ -70,9 +70,32 @@ impl TxMessage {
         })
     }
 
-    pub fn with_remote(mut self, rtr: bool) -> Self {
-        self.header.set_rtr(rtr);
-        self
+    pub fn new_remote(identifier: Id, dlc: u8) -> Option<Self> {
+        if dlc > 8 {
+            return None;
+        }
+
+        let mut header = TxHeader([0u32; HEADER_SIZE_DWORDS]);
+
+        header.set_dlc(dlc);
+        header.set_rtr(true);
+
+        match identifier {
+            Id::Standard(id) => {
+                header.set_sid(id.as_raw());
+            }
+            Id::Extended(id) => {
+                header.set_sid(id.standard_id().as_raw());
+                header.set_eid(id.as_raw() & 0x3FFFF);
+                header.set_ide(true);
+            }
+        }
+
+        Some(Self {
+            header,
+            data: [0u8; MAX_FD_BUFFER_SIZE],
+            data_len: dlc as usize,
+        })
     }
 
     pub fn with_bit_rate_switched(mut self, brs: bool) -> Self {
