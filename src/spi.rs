@@ -653,7 +653,16 @@ where
 
         let (length, bytes) = message.as_bytes();
 
-        self.write_ram(ram_address as u16, &bytes[..length])?;
+        // We need to make sure that the data we are writing to ram has a length
+        // which is a multiple of 4. By adding (4 - length % 4), we extend the
+        // length to the next multiple 4 boundary. This isn't always a good
+        // solution but in this specific case it works because we know that the
+        // there is definitely at least that much ram allocated for the TX
+        // message (we only do this when the DLC is < 8 and the minimum number
+        // of bytes allocated for a TX message is 8)
+        let data = &bytes[..length + (4 - length % 4)];
+
+        self.write_ram(ram_address as u16, data)?;
 
         /* Increment tail pointer but to NOT request transmission */
 
@@ -845,9 +854,18 @@ where
         let data_len = len_for_dlc(header.dlc(), header.fdf()).unwrap();
         let data_offset = if timestamp.is_some() { 3 } else { 2 };
 
+        // We need to make sure that the data we are reading from ram has a
+        // length which is a multiple of 4. By adding (4 - length % 4), we
+        // extend the length to the next multiple 4 boundary. This isn't always
+        // a good solution but in this specific case it works because we know
+        // that the there is definitely at least that much ram allocated for the
+        // RX message (we only do this when the DLC is < 8 and the minimum
+        // number of bytes allocated for a RX message is 8)
+        let read_len = data_len + (4 - data_len % 4);
+
         self.read_ram(
             (ram_address + 4 * data_offset) as u16,
-            &mut data[..data_len],
+            &mut data[..read_len],
         )?;
 
         /* Assemble RxMessage */
