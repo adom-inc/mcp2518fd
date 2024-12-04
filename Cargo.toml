@@ -6,6 +6,7 @@ edition = "2021"
 license = "MIT"
 
 [dependencies]
+arbitrary-int = "1.2.7"
 bitfield = "0.17.0"
 concat-idents = "1.1.5"
 defmt = { version = "0.3.10", optional = true }
@@ -15,4 +16,4 @@ num_enum = { version = "0.7.3", default-features = false }
 
 [features]
 
-defmt = ["dep:defmt"]
+defmt = ["dep:defmt", "arbitrary-int/defmt"]

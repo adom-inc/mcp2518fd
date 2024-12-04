@@ -8,7 +8,9 @@ use embedded_hal::spi::SpiBus;
 
 use crate::memory::chip::{IoControlRegister, OscillatorControlRegister};
 use crate::memory::controller::configuration::{
-    CanControlRegister, OperationMode, TimeStampControlRegister,
+    CanControlRegister, DataBitTimeConfigurationRegister, NominalBitTimeConfigurationRegister,
+    OperationMode, TimeStampControlRegister, TransmitterDelayCompensationMode,
+    TransmitterDelayCompensationRegister,
 };
 use crate::memory::controller::fifo::{
     FifoControlRegister, FifoNumber, FifoStatusRegister, TxEventFifoControlRegister,
@@ -27,11 +29,12 @@ use crate::message::rx::{RxHeader, RxMessage};
 use crate::message::tx::{TxEventObject, TxHeader, TxMessage};
 use crate::message::{len_for_dlc, MAX_FD_BUFFER_SIZE};
 use crate::settings::{
-    self, FilterConfiguration, FilterMatchMode, RxFifoConfiguration, TxFifoConfiguration,
+    self, BitTimeConfiguration, FilterConfiguration, FilterMatchMode, RxFifoConfiguration,
+    TxFifoConfiguration,
 };
 use crate::settings::{
-    FifoConfiguration, IoConfiguration, OscillatorConfiguration, SysClkDivider,
-    TxEventFifoConfiguration, TxQueueConfiguration, PLL,
+    FifoConfiguration, IoConfiguration, OscillatorConfiguration, Pll, SysClkDivider,
+    TxEventFifoConfiguration, TxQueueConfiguration,
 };
 
 #[derive(Debug)]
@@ -140,6 +143,7 @@ where
 
         self.configure_osc(settings.oscillator, delay)?;
         self.configure_io(settings.io_configuration)?;
+        self.configure_bit_timing(settings.bit_time_configuration)?;
         self.configure_tx_event_fifo(settings.tx_event_fifo)?;
         self.configure_tx_queue(settings.tx_queue)?;
 
@@ -219,8 +223,8 @@ where
         self.modify_register(|mut osc: OscillatorControlRegister| {
             // If enabled, system clock comes from 10x PLL, otherwise it comes directly from the XTAL
             osc.set_pllen(match oscillator_settings.pll {
-                PLL::On => true,
-                PLL::Off => false,
+                Pll::On => true,
+                Pll::Off => false,
             });
 
             // Whether or not to divide the system clock by 2
@@ -235,7 +239,7 @@ where
             osc
         })?;
 
-        if let settings::PLL::On = oscillator_settings.pll {
+        if let settings::Pll::On = oscillator_settings.pll {
             const MAX_ATTEMPTS: usize = 3;
 
             // Wait for PLL ready
@@ -262,6 +266,44 @@ where
             iocon.set_sof(io_config.start_of_frame_on_clko);
             iocon.set_intod(io_config.interrupt_pin_open_drain);
             iocon
+        })?;
+
+        Ok(())
+    }
+
+    pub fn configure_bit_timing(
+        &mut self,
+        bit_time_config: BitTimeConfiguration,
+    ) -> Result<(), ConfigError> {
+        self.modify_register(|mut cinbtcfg: NominalBitTimeConfigurationRegister| {
+            cinbtcfg.set_brp(bit_time_config.nominal.baud_rate_prescaler);
+            cinbtcfg.set_tseg1(bit_time_config.nominal.time_segment_1);
+            cinbtcfg.set_tseg2(bit_time_config.nominal.time_segment_2.value());
+            cinbtcfg.set_sjw(bit_time_config.nominal.synchronization_jump_width.value());
+
+            cinbtcfg
+        })?;
+
+        self.modify_register(|mut cidbtcfg: DataBitTimeConfigurationRegister| {
+            cidbtcfg.set_brp(bit_time_config.data.baud_rate_prescaler);
+            cidbtcfg.set_tseg1(bit_time_config.data.time_segment_1.value());
+            cidbtcfg.set_tseg2(bit_time_config.data.time_segment_2.value());
+            cidbtcfg.set_sjw(bit_time_config.data.synchronization_jump_width.value());
+
+            cidbtcfg
+        })?;
+
+        self.modify_register(|mut citdc: TransmitterDelayCompensationRegister| {
+            citdc.set_tdcmod(TransmitterDelayCompensationMode::Automatic);
+            citdc.set_tdco(
+                bit_time_config
+                    .data
+                    .transmitter_delay_compensation_offset
+                    .value(),
+            );
+            citdc.set_tdcv(0);
+
+            citdc
         })?;
 
         Ok(())

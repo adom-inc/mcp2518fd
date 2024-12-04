@@ -1,3 +1,4 @@
+use arbitrary_int::{u4, u5, u7};
 use embedded_can::Id;
 
 use crate::memory::controller::{
@@ -6,7 +7,7 @@ use crate::memory::controller::{
 };
 
 #[derive(Debug, Default)]
-pub enum PLL {
+pub enum Pll {
     #[default]
     Off,
     On,
@@ -21,12 +22,12 @@ pub enum SysClkDivider {
 
 #[derive(Debug, Default)]
 pub struct OscillatorConfiguration {
-    pub pll: PLL,
+    pub pll: Pll,
     pub divider: SysClkDivider,
 }
 
 impl OscillatorConfiguration {
-    pub fn new(pll: PLL, divider: SysClkDivider) -> Self {
+    pub fn new(pll: Pll, divider: SysClkDivider) -> Self {
         Self { pll, divider }
     }
 }
@@ -62,6 +63,119 @@ impl IoConfiguration {
     pub fn interrupt_pin_open_drain(mut self, interrupt_pin_open_drain: bool) -> Self {
         self.interrupt_pin_open_drain = interrupt_pin_open_drain;
         self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NominalBitTimeConfiguration {
+    pub baud_rate_prescaler: u8,
+    pub time_segment_1: u8,
+    pub time_segment_2: u7,
+    pub synchronization_jump_width: u7,
+}
+
+impl NominalBitTimeConfiguration {
+    /// Max bus length of 550m
+    pub const RATE_100_KBIT: Self = Self {
+        baud_rate_prescaler: 1,
+        time_segment_1: 158,
+        time_segment_2: u7::new(39),
+        synchronization_jump_width: u7::new(39),
+    };
+
+    /// Max bus length of 440m
+    pub const RATE_125_KBIT: Self = Self {
+        baud_rate_prescaler: 0,
+        time_segment_1: 254,
+        time_segment_2: u7::new(63),
+        synchronization_jump_width: u7::new(63),
+    };
+
+    /// Max bus length of 200m
+    pub const RATE_250_KBIT: Self = Self {
+        baud_rate_prescaler: 0,
+        time_segment_1: 126,
+        time_segment_2: u7::new(31),
+        synchronization_jump_width: u7::new(31),
+    };
+
+    /// Max bus length of 80m
+    pub const RATE_500_KBIT: Self = Self {
+        baud_rate_prescaler: 0,
+        time_segment_1: 62,
+        time_segment_2: u7::new(15),
+        synchronization_jump_width: u7::new(15),
+    };
+
+    /// Max bus length of 20m
+    pub const RATE_1_MBIT: Self = Self {
+        baud_rate_prescaler: 0,
+        time_segment_1: 30,
+        time_segment_2: u7::new(7),
+        synchronization_jump_width: u7::new(7),
+    };
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataBitTimeConfiguration {
+    pub baud_rate_prescaler: u8,
+    pub time_segment_1: u5,
+    pub time_segment_2: u4,
+    pub synchronization_jump_width: u4,
+
+    pub transmitter_delay_compensation_offset: u7,
+}
+
+impl DataBitTimeConfiguration {
+    pub const RATE_500_KBIT: Self = Self {
+        baud_rate_prescaler: 1,
+        time_segment_1: u5::new(30),
+        time_segment_2: u4::new(7),
+        synchronization_jump_width: u4::new(7),
+        transmitter_delay_compensation_offset: u7::new(62),
+    };
+
+    pub const RATE_1_MBIT: Self = Self {
+        baud_rate_prescaler: 0,
+        time_segment_1: u5::new(30),
+        time_segment_2: u4::new(7),
+        synchronization_jump_width: u4::new(7),
+        transmitter_delay_compensation_offset: u7::new(31),
+    };
+
+    pub const RATE_2_MBIT: Self = Self {
+        baud_rate_prescaler: 0,
+        time_segment_1: u5::new(14),
+        time_segment_2: u4::new(3),
+        synchronization_jump_width: u4::new(3),
+        transmitter_delay_compensation_offset: u7::new(15),
+    };
+
+    pub const RATE_5_MBIT: Self = Self {
+        baud_rate_prescaler: 0,
+        time_segment_1: u5::new(4),
+        time_segment_2: u4::new(1),
+        synchronization_jump_width: u4::new(1),
+        transmitter_delay_compensation_offset: u7::new(5),
+    };
+}
+
+/// For best performance, use nominal and data bit rates with the same baud rate
+/// prescaler. Identical TQ in both phases prevent quantization errors during
+/// bit rate switching.
+///
+/// TODO: Add functions for automatically calculating bit time configurations
+/// based on input parameters (bit rate, SYSCLK, bus length, max baud rate
+/// prescaler, etc.)
+#[derive(Debug)]
+pub struct BitTimeConfiguration {
+    pub nominal: NominalBitTimeConfiguration,
+    pub data: DataBitTimeConfiguration,
+}
+
+impl BitTimeConfiguration {
+    pub fn new(nominal: NominalBitTimeConfiguration, data: DataBitTimeConfiguration) -> Self {
+        Self { nominal, data }
     }
 }
 
@@ -169,6 +283,7 @@ impl TxQueueConfiguration {
 pub struct Settings {
     pub oscillator: OscillatorConfiguration,
     pub io_configuration: IoConfiguration,
+    pub bit_time_configuration: BitTimeConfiguration,
     pub tx_event_fifo: Option<TxEventFifoConfiguration>,
     pub tx_queue: Option<TxQueueConfiguration>,
     pub enable_time_based_counter: bool,

@@ -15,7 +15,8 @@ use mcp2518fd::{
     },
     message::tx::TxMessage,
     settings::{
-        FifoConfiguration, FifoMode, FilterConfiguration, FilterMatchMode, IoConfiguration,
+        BitTimeConfiguration, DataBitTimeConfiguration, FifoConfiguration, FifoMode,
+        FilterConfiguration, FilterMatchMode, IoConfiguration, NominalBitTimeConfiguration,
         OscillatorConfiguration, RxFifoConfiguration, Settings, TxQueueConfiguration,
     },
     spi::MCP2518FD,
@@ -116,6 +117,11 @@ fn main() -> ! {
                 oscillator: OscillatorConfiguration::default(),
                 // Use default values for IOCON register
                 io_configuration: IoConfiguration::new(),
+                // Configure the bit timings (assumes a 40MHz input clock)
+                bit_time_configuration: BitTimeConfiguration::new(
+                    NominalBitTimeConfiguration::RATE_500_KBIT,
+                    DataBitTimeConfiguration::RATE_2_MBIT,
+                ),
                 // Do not store any transmitted messages in the TEF
                 tx_event_fifo: None,
                 // Configure TXQ to have priority over all other FIFOs, and to
