@@ -185,6 +185,11 @@ where
         Ok(())
     }
 
+    pub fn get_op_mode(&mut self) -> Result<OperationMode, Error> {
+        let c1con = self.read_register::<CanControlRegister>()?;
+        Ok(c1con.opmode())
+    }
+
     /// Changes the operating mode of the chip. Will time out after 5 attempts.
     pub fn set_op_mode(
         &mut self,
