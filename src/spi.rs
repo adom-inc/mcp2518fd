@@ -161,6 +161,11 @@ where
             })?;
         }
 
+        self.modify_register(|mut cicon: CanControlRegister| {
+            cicon.set_rtxat(true);
+            cicon
+        })?;
+
         self.modify_register(|mut ciint: InterruptRegister| {
             ciint.set_rxie(true);
             ciint.set_txie(true);
