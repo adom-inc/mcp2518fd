@@ -33,12 +33,12 @@ pub struct TxMessage {
 }
 
 impl TxMessage {
-    pub fn new_fd(identifier: Id, data: &[u8]) -> Option<Self> {
-        Self::new_with_data(identifier, data, true)
+    pub fn new_fd(identifier: impl Into<Id>, data: &[u8]) -> Option<Self> {
+        Self::new_with_data(identifier.into(), data, true)
     }
 
-    pub fn new_2_0(identifier: Id, data: &[u8]) -> Option<Self> {
-        Self::new_with_data(identifier, data, false)
+    pub fn new_2_0(identifier: impl Into<Id>, data: &[u8]) -> Option<Self> {
+        Self::new_with_data(identifier.into(), data, false)
     }
 
     fn new_with_data(identifier: Id, data: &[u8], is_fd: bool) -> Option<Self> {
@@ -70,7 +70,7 @@ impl TxMessage {
         })
     }
 
-    pub fn new_remote(identifier: Id, dlc: u8) -> Option<Self> {
+    pub fn new_remote(identifier: impl Into<Id>, dlc: u8) -> Option<Self> {
         if dlc > 8 {
             return None;
         }
@@ -80,7 +80,7 @@ impl TxMessage {
         header.set_dlc(dlc);
         header.set_rtr(true);
 
-        match identifier {
+        match identifier.into() {
             Id::Standard(id) => {
                 header.set_sid(id.as_raw());
             }
