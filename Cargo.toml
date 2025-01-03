@@ -9,10 +9,11 @@ license = "MIT"
 arbitrary-int = "1.2.7"
 bitfield = "0.17.0"
 concat-idents = "1.1.5"
-defmt = { version = "0.3.10", optional = true }
 embedded-can = "0.4.1"
 embedded-hal = "1.0.0"
 num_enum = { version = "0.7.3", default-features = false }
+
+defmt = { version = "0.3.10", optional = true }
 
 [features]
 
