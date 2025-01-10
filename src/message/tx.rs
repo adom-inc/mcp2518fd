@@ -1,5 +1,5 @@
 use bitfield::bitfield;
-use embedded_can::Id;
+use embedded_can::{ExtendedId, Id, StandardId};
 
 use super::{dlc_for_len, len_for_dlc, HEADER_SIZE_DWORDS, MAX_FD_BUFFER_SIZE};
 
@@ -115,6 +115,17 @@ impl TxMessage {
 
     pub fn header(&self) -> &TxHeader<[u32; HEADER_SIZE_DWORDS]> {
         &self.header
+    }
+
+    /// Constructs the message ID from the frame header
+    pub fn id(&self) -> Id {
+        if self.header.ide() {
+            Id::Extended(
+                ExtendedId::new(((self.header.sid() as u32) << 18) | self.header.eid()).unwrap(),
+            )
+        } else {
+            Id::Standard(StandardId::new(self.header.sid()).unwrap())
+        }
     }
 
     pub fn data(&self) -> &[u8] {
