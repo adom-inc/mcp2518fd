@@ -11,3 +11,5 @@ pub mod spi;
 pub use spi::ConfigError;
 pub use spi::Error;
 pub use spi::MCP2518FD;
+
+pub use embedded_can as id;
