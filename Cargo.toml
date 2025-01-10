@@ -17,9 +17,11 @@ defmt = { version = "0.3.10", optional = true }
 
 maybe-async = { version = "0.2.10", features = ["is_sync"] }
 embedded-hal-async = { version = "1.0.0", optional = true }
-futures = { version = "0.3.31", optional = true }
+futures = { version = "0.3.31", optional = true, default-features = false}
 
 [features]
+
+default = []
 
 defmt = ["dep:defmt", "arbitrary-int/defmt"]
 async = ["dep:embedded-hal-async", "dep:futures"]
