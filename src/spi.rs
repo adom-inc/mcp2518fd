@@ -2,9 +2,19 @@ use core::fmt::Debug;
 
 use bitfield::bitfield;
 use embedded_can::{Id, StandardId};
-use embedded_hal::delay::DelayNs;
 use embedded_hal::digital::StatefulOutputPin;
+
+#[cfg(not(feature = "async"))]
+use embedded_hal::delay::DelayNs;
+#[cfg(not(feature = "async"))]
 use embedded_hal::spi::SpiBus;
+
+#[cfg(feature = "async")]
+use embedded_hal_async::delay::DelayNs;
+#[cfg(feature = "async")]
+use embedded_hal_async::spi::SpiBus;
+#[cfg(feature = "async")]
+use futures::future::OptionFuture;
 
 use crate::memory::chip::{IoControlRegister, OscillatorControlRegister};
 use crate::memory::controller::configuration::{
@@ -87,6 +97,7 @@ pub struct MCP2518FD<SPI, CS> {
     cs: CS,
 }
 
+#[cfg_attr(not(feature = "async"), maybe_async::maybe_async)]
 impl<SPI, CS, SPIE, CSE> MCP2518FD<SPI, CS>
 where
     SPI: SpiBus<u8, Error = SPIE>,
@@ -109,12 +120,12 @@ where
 
     /// Performs a software reset of the MCP2518FD chip over SPI (this puts it
     /// in configuration mode)
-    pub fn reset(&mut self) -> Result<(), Error> {
+    pub async fn reset(&mut self) -> Result<(), Error> {
         self.ready_slave_select();
 
         let instruction = Instruction(OpCode::RESET);
 
-        if self.send(&instruction.0.to_be_bytes()).is_err() {
+        if self.send(&instruction.0.to_be_bytes()).await.is_err() {
             self.cs.set_high().unwrap();
             Err(Error::SPIWrite)
         } else {
@@ -123,48 +134,53 @@ where
     }
 
     /// Does a full configuration sequence of the chip using the provided
-    /// settings. This function puts the chip into configration mode if it
+    /// settings. This function puts the chip into configuration mode if it
     /// isn't already, verifies that SPI communication with the chip is
     /// working, and writes to all the necessary configuration registers.
     ///
     /// You may want to reset the chip before calling this method. See
     /// [`MCP2518FD::reset`] for more information.
     ///
-    /// The data_bits_to_match field must be within 1..=18 if it is `Some`. A value of Some(0) will be interpretted the same as None, and
-    pub fn configure(
+    /// The data_bits_to_match field must be within 1..=18 if it is `Some`. A value of Some(0) will be interpreted the same as None, and
+    pub async fn configure(
         &mut self,
         settings: settings::Settings,
         delay: &mut impl DelayNs,
     ) -> Result<(), ConfigError> {
         self.set_op_mode(OperationMode::Configuration, delay)
+            .await
             .map_err(|_| ConfigError::ConfigurationModeTimeout)?;
 
-        self.verify_spi_communications()?;
+        self.verify_spi_communications().await?;
 
-        self.configure_osc(settings.oscillator, delay)?;
-        self.configure_io(settings.io_configuration)?;
-        self.configure_bit_timing(settings.bit_time_configuration)?;
-        self.configure_tx_event_fifo(settings.tx_event_fifo)?;
-        self.configure_tx_queue(settings.tx_queue)?;
+        self.configure_osc(settings.oscillator, delay).await?;
+        self.configure_io(settings.io_configuration).await?;
+        self.configure_bit_timing(settings.bit_time_configuration)
+            .await?;
+        self.configure_tx_event_fifo(settings.tx_event_fifo).await?;
+        self.configure_tx_queue(settings.tx_queue).await?;
 
         if settings.enable_time_based_counter {
             self.modify_register(|mut tscon: TimeStampControlRegister| {
                 tscon.set_tbcen(true);
                 tscon
-            })?;
+            })
+            .await?;
         }
 
         if let Some(dncnt) = settings.data_bits_to_match {
             self.modify_register(|mut cicon: CanControlRegister| {
                 cicon.set_dncnt(dncnt);
                 cicon
-            })?;
+            })
+            .await?;
         }
 
         self.modify_register(|mut cicon: CanControlRegister| {
             cicon.set_rtxat(true);
             cicon
-        })?;
+        })
+        .await?;
 
         self.modify_register(|mut ciint: InterruptRegister| {
             ciint.set_rxie(true);
@@ -185,18 +201,19 @@ where
             }
 
             ciint
-        })?;
+        })
+        .await?;
 
         Ok(())
     }
 
-    pub fn get_op_mode(&mut self) -> Result<OperationMode, Error> {
-        let c1con = self.read_register::<CanControlRegister>()?;
+    pub async fn get_op_mode(&mut self) -> Result<OperationMode, Error> {
+        let c1con = self.read_register::<CanControlRegister>().await?;
         Ok(c1con.opmode())
     }
 
     /// Changes the operating mode of the chip. Will time out after 5 attempts.
-    pub fn set_op_mode(
+    pub async fn set_op_mode(
         &mut self,
         op_mode: OperationMode,
         delay: &mut impl DelayNs,
@@ -204,14 +221,15 @@ where
         self.modify_register(|mut c1con: CanControlRegister| {
             c1con.set_opmode(op_mode);
             c1con
-        })?;
+        })
+        .await?;
 
         /* Delay 2ms checking every 500us for op mode change */
 
         const MAX_ATTEMPTS: usize = 5;
 
         for i in 0..MAX_ATTEMPTS {
-            let c1con = self.read_register::<CanControlRegister>()?;
+            let c1con = self.read_register::<CanControlRegister>().await?;
 
             if c1con.opmode() == op_mode {
                 break;
@@ -219,13 +237,13 @@ where
                 return Err(ConfigError::ChangeOpModeTimeout);
             }
 
-            delay.delay_us(500u32);
+            delay.delay_us(500u32).await;
         }
 
         Ok(())
     }
 
-    pub fn configure_osc(
+    pub async fn configure_osc(
         &mut self,
         oscillator_settings: OscillatorConfiguration,
         delay: &mut impl DelayNs,
@@ -247,14 +265,15 @@ where
             osc.set_oscdis(false);
 
             osc
-        })?;
+        })
+        .await?;
 
         if let settings::Pll::On = oscillator_settings.pll {
             const MAX_ATTEMPTS: usize = 3;
 
             // Wait for PLL ready
             for i in 0..MAX_ATTEMPTS {
-                let osc = self.read_register::<OscillatorControlRegister>()?;
+                let osc = self.read_register::<OscillatorControlRegister>().await?;
 
                 if osc.pllrdy() {
                     break;
@@ -262,26 +281,27 @@ where
                     return Err(ConfigError::PLLNotReady);
                 }
 
-                delay.delay_us(500u32);
+                delay.delay_us(500u32).await;
             }
         }
 
         Ok(())
     }
 
-    pub fn configure_io(&mut self, io_config: IoConfiguration) -> Result<(), ConfigError> {
+    pub async fn configure_io(&mut self, io_config: IoConfiguration) -> Result<(), ConfigError> {
         self.modify_register(|mut iocon: IoControlRegister| {
             iocon.set_xstbyen(io_config.enable_tx_standby_pin);
             iocon.set_txcanod(io_config.tx_can_open_drain);
             iocon.set_sof(io_config.start_of_frame_on_clko);
             iocon.set_intod(io_config.interrupt_pin_open_drain);
             iocon
-        })?;
+        })
+        .await?;
 
         Ok(())
     }
 
-    pub fn configure_bit_timing(
+    pub async fn configure_bit_timing(
         &mut self,
         bit_time_config: BitTimeConfiguration,
     ) -> Result<(), ConfigError> {
@@ -292,7 +312,8 @@ where
             cinbtcfg.set_sjw(bit_time_config.nominal.synchronization_jump_width.value());
 
             cinbtcfg
-        })?;
+        })
+        .await?;
 
         self.modify_register(|mut cidbtcfg: DataBitTimeConfigurationRegister| {
             cidbtcfg.set_brp(bit_time_config.data.baud_rate_prescaler);
@@ -301,7 +322,8 @@ where
             cidbtcfg.set_sjw(bit_time_config.data.synchronization_jump_width.value());
 
             cidbtcfg
-        })?;
+        })
+        .await?;
 
         self.modify_register(|mut citdc: TransmitterDelayCompensationRegister| {
             citdc.set_tdcmod(TransmitterDelayCompensationMode::Automatic);
@@ -314,7 +336,8 @@ where
             citdc.set_tdcv(0);
 
             citdc
-        })?;
+        })
+        .await?;
 
         Ok(())
     }
@@ -325,14 +348,15 @@ where
     /// Also please keep in mind that the total RAM size is 2K and this code does absolutely
     /// zero validation that your configuration is under this limit. The documentation recommends
     /// configuring the TEF first, then TEQ, then FIFOs as necessary.
-    pub fn configure_tx_event_fifo(
+    pub async fn configure_tx_event_fifo(
         &mut self,
         tx_event_fifo_config: Option<TxEventFifoConfiguration>,
     ) -> Result<(), ConfigError> {
         self.modify_register(|mut c1con: CanControlRegister| {
             c1con.set_stef(tx_event_fifo_config.is_some());
             c1con
-        })?;
+        })
+        .await?;
 
         if let Some(config) = tx_event_fifo_config {
             self.modify_register(|mut tef_control: TxEventFifoControlRegister| {
@@ -346,7 +370,8 @@ where
                 tef_control.set_tefneie(config.enable_fifo_not_empty_interrupt);
 
                 tef_control
-            })?;
+            })
+            .await?;
         }
 
         Ok(())
@@ -358,14 +383,15 @@ where
     /// Also please keep in mind that the total RAM size is 2K and this code does absolutely
     /// zero validation that your configuration is under this limit. The documentation recommends
     /// configuring the TEF first, then TEQ, then FIFOs as necessary.
-    pub fn configure_tx_queue(
+    pub async fn configure_tx_queue(
         &mut self,
         tx_queue_config: Option<TxQueueConfiguration>,
     ) -> Result<(), ConfigError> {
         self.modify_register(|mut c1con: CanControlRegister| {
             c1con.set_txqen(tx_queue_config.is_some());
             c1con
-        })?;
+        })
+        .await?;
 
         if let Some(config) = tx_queue_config {
             self.modify_register(|mut tx_queue_control: TxQueueControlRegister| {
@@ -379,7 +405,8 @@ where
                 tx_queue_control.set_txqnie(config.enable_queue_not_full_interrupt);
 
                 tx_queue_control
-            })?;
+            })
+            .await?;
         }
 
         Ok(())
@@ -387,7 +414,7 @@ where
 
     /// Configures a FIFO based on the settings provided. As per documentation, a single FIFO must
     /// be dedicated to RX or TX and all objects in that queue must have the same payload size.
-    pub fn configure_fifo(
+    pub async fn configure_fifo(
         &mut self,
         fifo_number: FifoNumber,
         fifo_config: FifoConfiguration,
@@ -434,25 +461,26 @@ where
             }
 
             fifo_control
-        })?;
+        })
+        .await?;
 
         Ok(())
     }
 
-    /// Confgiures one of the 32 acceptance filters. If the filter_config is
+    /// Configures one of the 32 acceptance filters. If the filter_config is
     /// None, the filter will be disabled instead.
     ///
-    /// Filters can be configured to accept only statndard frames, only
+    /// Filters can be configured to accept only standard frames, only
     /// extended frames, or both standard and extended frames. If either the
     /// filter_bits or mask_bits fields are set as MessageId::Standard, the
     /// corresponding EID bits will be set to 0.
     ///
-    /// When recieving standard frames, the EID compontent of the filter can be
+    /// When receiving standard frames, the EID component of the filter can be
     /// used to match against (up to) the first 18 bits of the message's data
     /// segment. The number of bits used is configured by `CiCON.DNCNT`. See
     /// the family reference manual for a more detailed description of this
     /// mechanism.
-    pub fn configure_filter(
+    pub async fn configure_filter(
         &mut self,
         filter_number: FilterNumber,
         filter_config: Option<FilterConfiguration>,
@@ -466,14 +494,15 @@ where
                 control.set_enabled(filter_index, false);
                 control
             },
-        )?;
+        )
+        .await?;
 
         // If we are just disabling it, then we are done here
         let Some(filter_config) = filter_config else {
             return Ok(());
         };
 
-        // Set filter object bits and fitler mode
+        // Set filter object bits and filter mode
         self.modify_repeated_register(
             filter_number,
             |mut object_register: FilterObjectRegister| {
@@ -496,7 +525,8 @@ where
 
                 object_register
             },
-        )?;
+        )
+        .await?;
 
         // Set the mask bits and exclusion mode
         self.modify_repeated_register(filter_number, |mut mask_register: MaskRegister| {
@@ -518,9 +548,10 @@ where
             });
 
             mask_register
-        })?;
+        })
+        .await?;
 
-        // Set the BP and renable the filter
+        // Set the BP and reenable the filter
         self.modify_repeated_register(
             control_register_number,
             |mut control: FilterControlRegister| {
@@ -528,27 +559,28 @@ where
                 control.set_enabled(filter_index, true);
                 control
             },
-        )?;
+        )
+        .await?;
 
         Ok(())
     }
 
-    /* Transmit and Receieve Functions */
+    /* Transmit and Receive Functions */
 
     /// Pushes a new message into the TXQ without setting the TXREQ bit to
     /// request transmission.
     ///
     /// Use this function only if you need to queue multiple messages before
-    /// transmitting all at once. To push a single message and immedately
+    /// transmitting all at once. To push a single message and immediately
     /// request transmission, use [`MCP2518FD::tx_queue_transmit_message`].
-    pub fn tx_queue_push_message(&mut self, message: &TxMessage) -> Result<(), Error> {
+    pub async fn tx_queue_push_message(&mut self, message: &TxMessage) -> Result<(), Error> {
         /* Make sure TXQ is enabled */
 
-        if !self.read_register::<CanControlRegister>()?.txqen() {
+        if !self.read_register::<CanControlRegister>().await?.txqen() {
             return Err(Error::TxQueueDisabled);
         }
 
-        let mut control_register = self.read_register::<TxQueueControlRegister>()?;
+        let mut control_register = self.read_register::<TxQueueControlRegister>().await?;
 
         /* Make sure FIFO is big enough */
 
@@ -558,7 +590,7 @@ where
 
         /* Make sure FIFO is not full */
 
-        let status_register = self.read_register::<TxQueueStatusRegister>()?;
+        let status_register = self.read_register::<TxQueueStatusRegister>().await?;
 
         if !status_register.txqnif() {
             return Err(Error::FifoFull);
@@ -567,7 +599,8 @@ where
         /* Write message to RAM */
 
         let ram_address = self
-            .read_repeated_register::<UserAddressRegister>(UserAddressKind::TxQueue)?
+            .read_repeated_register::<UserAddressRegister>(UserAddressKind::TxQueue)
+            .await?
             .calculate_ram_address();
 
         let (length, bytes) = message.as_bytes();
@@ -581,13 +614,13 @@ where
         // of bytes allocated for a TX message is 8)
         let data = &bytes[..length + (4 - length % 4)];
 
-        self.write_ram(ram_address as u16, data)?;
+        self.write_ram(ram_address as u16, data).await?;
 
-        /* Increment tail pointer but do NOT request trnsmission */
+        /* Increment tail pointer but do NOT request transmission */
 
         control_register.set_uinc();
 
-        self.write_register(control_register)?;
+        self.write_register(control_register).await?;
 
         Ok(())
     }
@@ -597,13 +630,14 @@ where
     ///
     /// Use this function only if you already previously queued one or more
     /// messages with [`MCP2518FD::tx_queue_push_message`]. To push a single
-    /// message and immedately request transmission, prefer
+    /// message and immediately request transmission, prefer
     /// [`MCP2518FD::tx_queue_transmit_message`].
-    pub fn tx_queue_request_transmission(&mut self) -> Result<(), Error> {
+    pub async fn tx_queue_request_transmission(&mut self) -> Result<(), Error> {
         self.modify_register(|mut txqcon: TxQueueControlRegister| {
             txqcon.set_txreq(true);
             txqcon
-        })?;
+        })
+        .await?;
 
         Ok(())
     }
@@ -614,9 +648,9 @@ where
     /// To push multiple messages before requesting transmission, see
     /// [`MCP2518FD::tx_queue_push_message`] and
     /// [`MCP2518FD::tx_queue_request_transmission`].
-    pub fn tx_queue_transmit_message(&mut self, message: &TxMessage) -> Result<(), Error> {
-        self.tx_queue_push_message(message)?;
-        self.tx_queue_request_transmission()?;
+    pub async fn tx_queue_transmit_message(&mut self, message: &TxMessage) -> Result<(), Error> {
+        self.tx_queue_push_message(message).await?;
+        self.tx_queue_request_transmission().await?;
 
         Ok(())
     }
@@ -625,15 +659,16 @@ where
     /// bit to request transmission.
     ///
     /// Use this function only if you need to queue multiple messages before
-    /// transmitting all at once. To push a single message and immedately
+    /// transmitting all at once. To push a single message and immediately
     /// request transmission, use [`MCP2518FD::tx_fifo_transmit_message`].
-    pub fn tx_fifo_push_message(
+    pub async fn tx_fifo_push_message(
         &mut self,
         fifo_number: FifoNumber,
         message: &TxMessage,
     ) -> Result<(), Error> {
-        let mut control_register =
-            self.read_repeated_register::<FifoControlRegister>(fifo_number)?;
+        let mut control_register = self
+            .read_repeated_register::<FifoControlRegister>(fifo_number)
+            .await?;
 
         /* Make sure it's a transmit FIFO */
 
@@ -649,7 +684,9 @@ where
 
         /* Make sure FIFO is not full */
 
-        let status_register = self.read_repeated_register::<FifoStatusRegister>(fifo_number)?;
+        let status_register = self
+            .read_repeated_register::<FifoStatusRegister>(fifo_number)
+            .await?;
 
         if !status_register.tfnrfnif() {
             return Err(Error::FifoFull);
@@ -658,7 +695,8 @@ where
         /* Write message to RAM */
 
         let ram_address = self
-            .read_repeated_register::<UserAddressRegister>(UserAddressKind::Fifo(fifo_number))?
+            .read_repeated_register::<UserAddressRegister>(UserAddressKind::Fifo(fifo_number))
+            .await?
             .calculate_ram_address();
 
         let (length, bytes) = message.as_bytes();
@@ -672,13 +710,14 @@ where
         // of bytes allocated for a TX message is 8)
         let data = &bytes[..length + (4 - length % 4)];
 
-        self.write_ram(ram_address as u16, data)?;
+        self.write_ram(ram_address as u16, data).await?;
 
         /* Increment tail pointer but to NOT request transmission */
 
         control_register.set_uinc();
 
-        self.write_repeated_register(fifo_number, control_register)?;
+        self.write_repeated_register(fifo_number, control_register)
+            .await?;
 
         Ok(())
     }
@@ -688,13 +727,17 @@ where
     ///
     /// Use this function only if you already previously queued one or more
     /// messages with [`MCP2518FD::tx_fifo_push_message`]. To push a single
-    /// message and immedately request transmission, prefer
+    /// message and immediately request transmission, prefer
     /// [`MCP2518FD::tx_fifo_transmit_message`].
-    pub fn tx_fifo_request_transmission(&mut self, fifo_number: FifoNumber) -> Result<(), Error> {
+    pub async fn tx_fifo_request_transmission(
+        &mut self,
+        fifo_number: FifoNumber,
+    ) -> Result<(), Error> {
         self.modify_repeated_register(fifo_number, |mut fifocon: FifoControlRegister| {
             fifocon.set_txreq(true);
             fifocon
-        })?;
+        })
+        .await?;
 
         Ok(())
     }
@@ -705,20 +748,20 @@ where
     /// To push multiple messages before requesting transmission, see
     /// [`MCP2518FD::tx_fifo_push_message`] and
     /// [`MCP2518FD::tx_fifo_request_transmission`].
-    pub fn tx_fifo_transmit_message(
+    pub async fn tx_fifo_transmit_message(
         &mut self,
         fifo_number: FifoNumber,
         message: &TxMessage,
     ) -> Result<(), Error> {
-        self.tx_fifo_push_message(fifo_number, message)?;
-        self.tx_fifo_request_transmission(fifo_number)?;
+        self.tx_fifo_push_message(fifo_number, message).await?;
+        self.tx_fifo_request_transmission(fifo_number).await?;
 
         Ok(())
     }
 
     /// Checks to see if there are any messages in the TEF
-    pub fn tx_event_fifo_has_next(&mut self) -> Result<bool, Error> {
-        let status_register = self.read_register::<TxEventFifoStatusRegister>()?;
+    pub async fn tx_event_fifo_has_next(&mut self) -> Result<bool, Error> {
+        let status_register = self.read_register::<TxEventFifoStatusRegister>().await?;
 
         Ok(status_register.tefneif())
     }
@@ -728,27 +771,28 @@ where
     ///
     /// Unless you have a specific use case for this, you most likely want to
     /// use [`MCP2518FD::tx_event_fifo_get_next`]
-    pub fn tx_event_fifo_peek_next(&mut self) -> Result<Option<TxEventObject>, Error> {
+    pub async fn tx_event_fifo_peek_next(&mut self) -> Result<Option<TxEventObject>, Error> {
         /* Make sure there is data to read */
 
-        if !self.tx_event_fifo_has_next()? {
+        if !self.tx_event_fifo_has_next().await? {
             return Ok(None);
         }
 
         /* Get the address of the next object */
 
         let ram_address = self
-            .read_repeated_register::<UserAddressRegister>(UserAddressKind::TxEventFifo)?
+            .read_repeated_register::<UserAddressRegister>(UserAddressKind::TxEventFifo)
+            .await?
             .calculate_ram_address();
 
         /* Check if timestamps are enabled and read accordingly */
 
-        let control_register = self.read_register::<TxEventFifoControlRegister>()?;
+        let control_register = self.read_register::<TxEventFifoControlRegister>().await?;
 
         let obj = if control_register.teftsen() {
             let mut buf = [0u8; 12];
 
-            self.read_ram(ram_address as u16, &mut buf)?;
+            self.read_ram(ram_address as u16, &mut buf).await?;
 
             TxEventObject {
                 header: TxHeader([
@@ -760,7 +804,7 @@ where
         } else {
             let mut buf = [0u8; 8];
 
-            self.read_ram(ram_address as u16, &mut buf)?;
+            self.read_ram(ram_address as u16, &mut buf).await?;
 
             TxEventObject {
                 header: TxHeader([
@@ -780,8 +824,8 @@ where
     /// To only check if a message is available without pulling it from the
     /// FIFO, see [`MCP2518FD::tx_event_fifo_has_next`] and
     /// [`MCP2518FD::tx_event_fifo_peek_next`]
-    pub fn tx_event_fifo_get_next(&mut self) -> Result<Option<TxEventObject>, Error> {
-        let obj = self.tx_event_fifo_peek_next()?;
+    pub async fn tx_event_fifo_get_next(&mut self) -> Result<Option<TxEventObject>, Error> {
+        let obj = self.tx_event_fifo_peek_next().await?;
 
         let Some(obj) = obj else {
             return Ok(None);
@@ -790,16 +834,19 @@ where
         self.modify_register(|mut tefcon: TxEventFifoControlRegister| {
             tefcon.set_uinc();
             tefcon
-        })?;
+        })
+        .await?;
 
         Ok(Some(obj))
     }
 
-    /// Checks to see if there are any messages in the given recieve FIFO
-    pub fn rx_fifo_has_next(&mut self, fifo_number: FifoNumber) -> Result<bool, Error> {
+    /// Checks to see if there are any messages in the given receive FIFO
+    pub async fn rx_fifo_has_next(&mut self, fifo_number: FifoNumber) -> Result<bool, Error> {
         /* Make sure it's a receive FIFO */
 
-        let control_register = self.read_repeated_register::<FifoControlRegister>(fifo_number)?;
+        let control_register = self
+            .read_repeated_register::<FifoControlRegister>(fifo_number)
+            .await?;
 
         if control_register.txen() {
             return Err(Error::FifoNotRx);
@@ -807,7 +854,9 @@ where
 
         /* Check is the FIFO has any messages in it */
 
-        let status_register = self.read_repeated_register::<FifoStatusRegister>(fifo_number)?;
+        let status_register = self
+            .read_repeated_register::<FifoStatusRegister>(fifo_number)
+            .await?;
 
         Ok(status_register.tfnrfnif())
     }
@@ -817,27 +866,28 @@ where
     ///
     /// Unless you have a specific use case for this, you most likely want to
     /// use [`MCP2518FD::rx_fifo_get_next`]
-    pub fn rx_fifo_peek_next(
+    pub async fn rx_fifo_peek_next(
         &mut self,
         fifo_number: FifoNumber,
     ) -> Result<Option<RxMessage>, Error> {
         /* Make sure there is data to read */
 
-        if !self.rx_fifo_has_next(fifo_number)? {
+        if !self.rx_fifo_has_next(fifo_number).await? {
             return Ok(None);
         }
 
         /* Get the address of the next object */
 
         let ram_address = self
-            .read_repeated_register::<UserAddressRegister>(UserAddressKind::Fifo(fifo_number))?
+            .read_repeated_register::<UserAddressRegister>(UserAddressKind::Fifo(fifo_number))
+            .await?
             .calculate_ram_address();
 
         /* Read the message header to see how much data we need to read */
 
         let mut buf = [0u8; 8];
 
-        self.read_ram(ram_address as u16, &mut buf)?;
+        self.read_ram(ram_address as u16, &mut buf).await?;
 
         let header = RxHeader([
             u32::from_le_bytes(buf[0..4].try_into().unwrap()),
@@ -846,8 +896,11 @@ where
 
         /* Read timestamp (if applicable) */
 
-        let control_register = self.read_repeated_register::<FifoControlRegister>(fifo_number)?;
+        let control_register = self
+            .read_repeated_register::<FifoControlRegister>(fifo_number)
+            .await?;
 
+        #[cfg(not(feature = "async"))]
         let timestamp = control_register
             .rxtsen()
             .then(|| {
@@ -857,6 +910,16 @@ where
                 Ok(u32::from_le_bytes(ts[..].try_into().unwrap()))
             })
             .transpose()?;
+
+        #[cfg(feature = "async")]
+        let timestamp = OptionFuture::from(control_register.rxtsen().then_some(async {
+            let mut ts = [0u8; 4];
+            self.read_ram((ram_address + 4 * 2) as u16, &mut ts).await?;
+
+            Ok(u32::from_le_bytes(ts[..].try_into().unwrap()))
+        }))
+        .await
+        .transpose()?;
 
         /* Read the content of the message */
 
@@ -876,7 +939,8 @@ where
         self.read_ram(
             (ram_address + 4 * data_offset) as u16,
             &mut data[..read_len],
-        )?;
+        )
+        .await?;
 
         /* Assemble RxMessage */
 
@@ -892,11 +956,11 @@ where
     /// To only check if a message is available without pulling it from the
     /// FIFO, see [`MCP2518FD::rx_fifo_has_next`] and
     /// [`MCP2518FD::rx_fifo_peek_next`]
-    pub fn rx_fifo_get_next(
+    pub async fn rx_fifo_get_next(
         &mut self,
         fifo_number: FifoNumber,
     ) -> Result<Option<RxMessage>, Error> {
-        let msg = self.rx_fifo_peek_next(fifo_number)?;
+        let msg = self.rx_fifo_peek_next(fifo_number).await?;
 
         let Some(msg) = msg else {
             return Ok(None);
@@ -905,44 +969,47 @@ where
         self.modify_repeated_register(fifo_number, |mut tefcon: FifoControlRegister| {
             tefcon.set_uinc();
             tefcon
-        })?;
+        })
+        .await?;
 
         Ok(Some(msg))
     }
 
     /* Interrupt related operations */
 
-    pub fn get_highest_interrupt_codes(&mut self) -> Result<InterruptCodeRegister, Error> {
-        self.read_register::<InterruptCodeRegister>()
+    pub async fn get_highest_interrupt_codes(&mut self) -> Result<InterruptCodeRegister, Error> {
+        self.read_register::<InterruptCodeRegister>().await
     }
 
-    pub fn get_top_level_interrupt_statuses(&mut self) -> Result<InterruptRegister, Error> {
-        self.read_register::<InterruptRegister>()
+    pub async fn get_top_level_interrupt_statuses(&mut self) -> Result<InterruptRegister, Error> {
+        self.read_register::<InterruptRegister>().await
     }
 
-    pub fn get_rx_interrupt_statuses(&mut self) -> Result<RxInterruptStatusRegister, Error> {
-        self.read_register::<RxInterruptStatusRegister>()
+    pub async fn get_rx_interrupt_statuses(&mut self) -> Result<RxInterruptStatusRegister, Error> {
+        self.read_register::<RxInterruptStatusRegister>().await
     }
 
-    pub fn get_rx_overflow_interrupt_statuses(
+    pub async fn get_rx_overflow_interrupt_statuses(
         &mut self,
     ) -> Result<RxOverflowInterruptStatusRegister, Error> {
         self.read_register::<RxOverflowInterruptStatusRegister>()
+            .await
     }
 
-    pub fn get_tx_interrupt_statuses(&mut self) -> Result<TxInterruptStatusRegister, Error> {
-        self.read_register::<TxInterruptStatusRegister>()
+    pub async fn get_tx_interrupt_statuses(&mut self) -> Result<TxInterruptStatusRegister, Error> {
+        self.read_register::<TxInterruptStatusRegister>().await
     }
 
-    pub fn get_tx_attempt_interrupt_statuses(
+    pub async fn get_tx_attempt_interrupt_statuses(
         &mut self,
     ) -> Result<TxAttemptInterruptStatusRegister, Error> {
         self.read_register::<TxAttemptInterruptStatusRegister>()
+            .await
     }
 
     /* Generic register ops with mapping */
 
-    pub fn modify_repeated_register<R, F>(
+    pub async fn modify_repeated_register<R, F>(
         &mut self,
         index: R::Index,
         transform: F,
@@ -951,64 +1018,69 @@ where
         R: RepeatedRegister + From<u32> + Into<u32>,
         F: FnOnce(R) -> R,
     {
-        let register = self.read_repeated_register::<R>(index)?;
+        let register = self.read_repeated_register::<R>(index).await?;
 
         self.write_repeated_register::<R>(index, transform(register))
+            .await
     }
 
-    pub fn read_repeated_register<R>(&mut self, index: R::Index) -> Result<R, Error>
+    pub async fn read_repeated_register<R>(&mut self, index: R::Index) -> Result<R, Error>
     where
         R: RepeatedRegister + From<u32>,
     {
         let address = R::get_address_for(index);
 
-        self.read_sfr(&address).map(R::from)
+        self.read_sfr(&address).await.map(R::from)
     }
 
-    pub fn write_repeated_register<R>(&mut self, index: R::Index, value: R) -> Result<(), Error>
+    pub async fn write_repeated_register<R>(
+        &mut self,
+        index: R::Index,
+        value: R,
+    ) -> Result<(), Error>
     where
         R: RepeatedRegister + Into<u32>,
     {
         let address = R::get_address_for(index);
 
-        self.write_sfr(&address, value.into())
+        self.write_sfr(&address, value.into()).await
     }
 
-    pub fn modify_register<R, F>(&mut self, transform: F) -> Result<(), Error>
+    pub async fn modify_register<R, F>(&mut self, transform: F) -> Result<(), Error>
     where
         R: Register + From<u32> + Into<u32>,
         F: FnOnce(R) -> R,
     {
-        let register = self.read_register::<R>()?;
+        let register = self.read_register::<R>().await?;
 
-        self.write_register::<R>(transform(register))
+        self.write_register::<R>(transform(register)).await
     }
 
-    pub fn read_register<R>(&mut self) -> Result<R, Error>
+    pub async fn read_register<R>(&mut self) -> Result<R, Error>
     where
         R: Register + From<u32>,
     {
         let address = R::get_address();
 
-        self.read_sfr(&address).map(R::from)
+        self.read_sfr(&address).await.map(R::from)
     }
 
-    pub fn write_register<R>(&mut self, value: R) -> Result<(), Error>
+    pub async fn write_register<R>(&mut self, value: R) -> Result<(), Error>
     where
         R: Register + Into<u32>,
     {
         let address = R::get_address();
 
-        self.write_sfr(&address, value.into())
+        self.write_sfr(&address, value.into()).await
     }
 
     /* Raw SFR Ops (Minimal type checking) */
 
-    fn read_sfr(&mut self, address: &SFRAddress) -> Result<u32, Error> {
+    async fn read_sfr(&mut self, address: &SFRAddress) -> Result<u32, Error> {
         self.ready_slave_select();
         let mut instruction = Instruction(OpCode::READ);
         instruction.set_address(*address as u16);
-        match self.send(&instruction.into_spi_data()) {
+        match self.send(&instruction.into_spi_data()).await {
             Ok(_) => (),
             Err(e) => {
                 self.reset_slave_select();
@@ -1016,16 +1088,16 @@ where
             }
         }
 
-        let read_value = self.read32();
+        let read_value = self.read32().await;
         self.reset_slave_select();
         read_value
     }
 
-    fn write_sfr(&mut self, address: &SFRAddress, value: u32) -> Result<(), Error> {
+    async fn write_sfr(&mut self, address: &SFRAddress, value: u32) -> Result<(), Error> {
         self.ready_slave_select();
         let mut instruction = Instruction(OpCode::WRITE);
         instruction.set_address(*address as u16);
-        match self.send(&instruction.into_spi_data()) {
+        match self.send(&instruction.into_spi_data()).await {
             Ok(_) => (),
             Err(e) => {
                 self.reset_slave_select();
@@ -1035,7 +1107,7 @@ where
 
         // The "instruction" needs to be converted to BE bytes but the actual SFR register
         // needs to be in LE format!!!
-        let ret = self.send(&value.to_le_bytes());
+        let ret = self.send(&value.to_le_bytes()).await;
         self.reset_slave_select();
         ret
     }
@@ -1043,14 +1115,14 @@ where
     /* RAM related functions */
 
     /// Verify SPI connection is working by writing to an available ram location.
-    pub fn verify_spi_communications(&mut self) -> Result<(), ConfigError> {
+    pub async fn verify_spi_communications(&mut self) -> Result<(), ConfigError> {
         let address = 0x400;
         for i in 0..32 {
             let data: u32 = 1 << i;
-            self.write_ram(address, &data.to_le_bytes())?;
+            self.write_ram(address, &data.to_le_bytes()).await?;
 
             let mut read_back_buf = [0u8; 4];
-            self.read_ram(address, &mut read_back_buf)?;
+            self.read_ram(address, &mut read_back_buf).await?;
             let read_back_value = u32::from_le_bytes(read_back_buf);
             if read_back_value != data {
                 return Err(ConfigError::SPIFailedRAMEcho);
@@ -1060,7 +1132,7 @@ where
     }
 
     /// Reads a contiguous range from RAM into the provided buffer
-    pub fn read_ram(&mut self, address: u16, data: &mut [u8]) -> Result<(), Error> {
+    pub async fn read_ram(&mut self, address: u16, data: &mut [u8]) -> Result<(), Error> {
         is_valid_ram_address(address as u32, data.len())
             .then_some(())
             .ok_or(Error::InvalidRamAddress(address))?;
@@ -1074,7 +1146,7 @@ where
         let mut instruction = Instruction(OpCode::READ);
         instruction.set_address(address);
 
-        match self.send(&instruction.into_spi_data()) {
+        match self.send(&instruction.into_spi_data()).await {
             Ok(_) => (),
             Err(_) => {
                 self.reset_slave_select();
@@ -1082,13 +1154,13 @@ where
             }
         }
 
-        let result = self.read(data);
+        let result = self.read(data).await;
         self.reset_slave_select();
         result
     }
 
     /// Writes to a contiguous range in RAM from the provided buffer
-    pub fn write_ram(&mut self, address: u16, data: &[u8]) -> Result<(), Error> {
+    pub async fn write_ram(&mut self, address: u16, data: &[u8]) -> Result<(), Error> {
         is_valid_ram_address(address as u32, data.len())
             .then_some(())
             .ok_or(Error::InvalidRamAddress(address))?;
@@ -1102,7 +1174,7 @@ where
         let mut instruction = Instruction(OpCode::WRITE);
         instruction.set_address(address);
 
-        match self.send(&instruction.into_spi_data()) {
+        match self.send(&instruction.into_spi_data()).await {
             Ok(_) => (),
             Err(_) => {
                 self.reset_slave_select();
@@ -1110,28 +1182,28 @@ where
             }
         };
 
-        let result = self.send(data);
+        let result = self.send(data).await;
         self.reset_slave_select();
         result
     }
 
     /* Low level SPI functions */
 
-    fn read(&mut self, buf: &mut [u8]) -> Result<(), Error> {
-        match self.spi.transfer_in_place(buf) {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<(), Error> {
+        match self.spi.transfer_in_place(buf).await {
             Ok(_) => Ok(()),
             Err(_) => Err(Error::SPIRead),
         }
     }
 
-    fn read32(&mut self) -> Result<u32, Error> {
+    async fn read32(&mut self) -> Result<u32, Error> {
         let mut buf = [0u8; 4];
-        self.read(&mut buf)?;
+        self.read(&mut buf).await?;
         Ok(u32::from_le_bytes(buf))
     }
 
-    fn send(&mut self, data: &[u8]) -> Result<(), Error> {
-        match self.spi.write(data) {
+    async fn send(&mut self, data: &[u8]) -> Result<(), Error> {
+        match self.spi.write(data).await {
             Ok(_) => Ok(()),
             Err(_) => Err(Error::SPIWrite),
         }
