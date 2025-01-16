@@ -6,13 +6,14 @@ use embedded_hal::digital::StatefulOutputPin;
 
 #[cfg(not(feature = "async"))]
 use embedded_hal::delay::DelayNs;
+use embedded_hal::spi::Operation;
 #[cfg(not(feature = "async"))]
-use embedded_hal::spi::SpiBus;
+use embedded_hal::spi::SpiDevice;
 
 #[cfg(feature = "async")]
 use embedded_hal_async::delay::DelayNs;
 #[cfg(feature = "async")]
-use embedded_hal_async::spi::SpiBus;
+use embedded_hal_async::spi::SpiDevice;
 #[cfg(feature = "async")]
 use futures::future::OptionFuture;
 
@@ -92,45 +93,37 @@ impl From<Error> for ConfigError {
     }
 }
 
-pub struct MCP2518FD<SPI, CS> {
+pub struct MCP2518FD<SPI> {
     spi: SPI,
-    cs: CS,
 }
 
 #[cfg_attr(not(feature = "async"), maybe_async::maybe_async)]
-impl<SPI, CS, SPIE, CSE> MCP2518FD<SPI, CS>
+impl<SPI, SPIE> MCP2518FD<SPI>
 where
-    SPI: SpiBus<u8, Error = SPIE>,
-    CS: StatefulOutputPin<Error = CSE>,
+    SPI: SpiDevice<u8, Error = SPIE>,
     SPIE: Debug,
-    CSE: Debug,
 {
     /// Constructs a new MCP2518FD controller from an SPI bus and CS GPIO pin
-    pub fn new(spi: SPI, mut cs: CS) -> MCP2518FD<SPI, CS> {
-        cs.set_high().unwrap();
-
-        Self { spi, cs }
+    pub fn new(spi: SPI) -> MCP2518FD<SPI> {
+        Self { spi }
     }
 
     /// Releases ownership of the SPI resources
-    pub fn free(mut self) -> (SPI, CS) {
-        self.cs.set_high().unwrap();
-        (self.spi, self.cs)
+    pub fn free(self) -> SPI {
+        self.spi
     }
 
     /// Performs a software reset of the MCP2518FD chip over SPI (this puts it
     /// in configuration mode)
     pub async fn reset(&mut self) -> Result<(), Error> {
-        self.ready_slave_select();
-
         let instruction = Instruction(OpCode::RESET);
 
-        if self.send(&instruction.0.to_be_bytes()).await.is_err() {
-            self.cs.set_high().unwrap();
-            Err(Error::SPIWrite)
-        } else {
-            Ok(())
-        }
+        self.spi
+            .write(&instruction.0.to_be_bytes())
+            .await
+            .map_err(|_| Error::SPIWrite)?;
+
+        Ok(())
     }
 
     /// Does a full configuration sequence of the chip using the provided
@@ -1077,39 +1070,37 @@ where
     /* Raw SFR Ops (Minimal type checking) */
 
     async fn read_sfr(&mut self, address: &SFRAddress) -> Result<u32, Error> {
-        self.ready_slave_select();
         let mut instruction = Instruction(OpCode::READ);
         instruction.set_address(*address as u16);
-        match self.send(&instruction.into_spi_data()).await {
-            Ok(_) => (),
-            Err(e) => {
-                self.reset_slave_select();
-                return Err(e);
-            }
-        }
 
-        let read_value = self.read32().await;
-        self.reset_slave_select();
-        read_value
+        let mut buf = [0u8; 4];
+
+        self.spi
+            .transaction(&mut [
+                Operation::Write(&instruction.into_spi_data()),
+                Operation::Read(&mut buf),
+            ])
+            .await
+            .map_err(|_| Error::SPIRead)?;
+
+        Ok(u32::from_le_bytes(buf))
     }
 
     async fn write_sfr(&mut self, address: &SFRAddress, value: u32) -> Result<(), Error> {
-        self.ready_slave_select();
         let mut instruction = Instruction(OpCode::WRITE);
         instruction.set_address(*address as u16);
-        match self.send(&instruction.into_spi_data()).await {
-            Ok(_) => (),
-            Err(e) => {
-                self.reset_slave_select();
-                return Err(e);
-            }
-        }
 
-        // The "instruction" needs to be converted to BE bytes but the actual SFR register
-        // needs to be in LE format!!!
-        let ret = self.send(&value.to_le_bytes()).await;
-        self.reset_slave_select();
-        ret
+        self.spi
+            .transaction(&mut [
+                Operation::Write(&instruction.into_spi_data()),
+                // The "instruction" needs to be converted to BE bytes but the actual SFR register
+                // needs to be in LE format!!!
+                Operation::Write(&value.to_le_bytes()),
+            ])
+            .await
+            .map_err(|_| Error::SPIRead)?;
+
+        Ok(())
     }
 
     /* RAM related functions */
@@ -1131,6 +1122,36 @@ where
         Ok(())
     }
 
+    pub async fn verify_spi_communications_long(&mut self) -> Result<(), ConfigError> {
+        let address = 0x400;
+
+        let mut dword_data = [0u32; 32];
+        for i in 0..32 {
+            dword_data[i] = 1 << i;
+        }
+
+        let mut data = [0u8; 32 * 4];
+        for i in 0..32 {
+            let bytes = dword_data[i].to_le_bytes();
+
+            data[i * 4 + 0] = bytes[0];
+            data[i * 4 + 1] = bytes[1];
+            data[i * 4 + 2] = bytes[2];
+            data[i * 4 + 3] = bytes[3];
+        }
+
+        self.write_ram(address, &data).await?;
+
+        let mut read_back_buf = [0u8; 32 * 4];
+        self.read_ram(address, &mut read_back_buf).await?;
+
+        if read_back_buf != data {
+            return Err(ConfigError::SPIFailedRAMEcho);
+        }
+
+        Ok(())
+    }
+
     /// Reads a contiguous range from RAM into the provided buffer
     pub async fn read_ram(&mut self, address: u16, data: &mut [u8]) -> Result<(), Error> {
         is_valid_ram_address(address as u32, data.len())
@@ -1141,22 +1162,18 @@ where
             return Err(Error::InvalidReadLength(data.len()));
         }
 
-        self.ready_slave_select();
-
         let mut instruction = Instruction(OpCode::READ);
         instruction.set_address(address);
 
-        match self.send(&instruction.into_spi_data()).await {
-            Ok(_) => (),
-            Err(_) => {
-                self.reset_slave_select();
-                return Err(Error::SPIWrite);
-            }
-        }
+        self.spi
+            .transaction(&mut [
+                Operation::Write(&instruction.into_spi_data()),
+                Operation::Read(data),
+            ])
+            .await
+            .map_err(|_| Error::SPIRead)?;
 
-        let result = self.read(data).await;
-        self.reset_slave_select();
-        result
+        Ok(())
     }
 
     /// Writes to a contiguous range in RAM from the provided buffer
@@ -1169,57 +1186,18 @@ where
             return Err(Error::InvalidWriteLength(data.len()));
         }
 
-        self.ready_slave_select();
-
         let mut instruction = Instruction(OpCode::WRITE);
         instruction.set_address(address);
 
-        match self.send(&instruction.into_spi_data()).await {
-            Ok(_) => (),
-            Err(_) => {
-                self.reset_slave_select();
-                return Err(Error::SPIWrite);
-            }
-        };
+        self.spi
+            .transaction(&mut [
+                Operation::Write(&instruction.into_spi_data()),
+                Operation::Write(data),
+            ])
+            .await
+            .map_err(|_| Error::SPIWrite)?;
 
-        let result = self.send(data).await;
-        self.reset_slave_select();
-        result
-    }
-
-    /* Low level SPI functions */
-
-    async fn read(&mut self, buf: &mut [u8]) -> Result<(), Error> {
-        match self.spi.transfer_in_place(buf).await {
-            Ok(_) => Ok(()),
-            Err(_) => Err(Error::SPIRead),
-        }
-    }
-
-    async fn read32(&mut self) -> Result<u32, Error> {
-        let mut buf = [0u8; 4];
-        self.read(&mut buf).await?;
-        Ok(u32::from_le_bytes(buf))
-    }
-
-    async fn send(&mut self, data: &[u8]) -> Result<(), Error> {
-        match self.spi.write(data).await {
-            Ok(_) => Ok(()),
-            Err(_) => Err(Error::SPIWrite),
-        }
-    }
-
-    /// Ready slave select will pull the slave select line to ACTIVE.
-    fn ready_slave_select(&mut self) {
-        if self.cs.is_set_low().unwrap() {
-            self.cs.set_high().unwrap();
-        }
-        self.cs.set_low().unwrap();
-    }
-
-    /// Reset slave select will pull the slave select line to INACTIVE.
-    fn reset_slave_select(&mut self) {
-        self.cs.set_high().unwrap();
+        Ok(())
     }
 }
 
