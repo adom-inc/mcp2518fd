@@ -2,7 +2,6 @@ use core::fmt::Debug;
 
 use bitfield::bitfield;
 use embedded_can::{Id, StandardId};
-use embedded_hal::digital::StatefulOutputPin;
 
 #[cfg(not(feature = "async"))]
 use embedded_hal::delay::DelayNs;
