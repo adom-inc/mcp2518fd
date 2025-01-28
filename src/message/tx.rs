@@ -23,7 +23,33 @@ bitfield! {
     pub u32, seq, set_seq: 63, 41;
 }
 
-#[derive(Debug)]
+impl TxHeader<[u32; HEADER_SIZE_DWORDS]> {
+    fn raw_id(&self) -> u32 {
+        ((self.sid() as u32) << 18) | self.eid()
+    }
+}
+
+impl<T: Eq> Eq for TxHeader<T> {}
+
+impl<T: PartialEq> PartialEq for TxHeader<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Ord for TxHeader<[u32; HEADER_SIZE_DWORDS]> {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.raw_id().cmp(&other.raw_id())
+    }
+}
+
+impl PartialOrd for TxHeader<[u32; HEADER_SIZE_DWORDS]> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct TxMessage {
     #[cfg_attr(feature = "defmt", defmt(Debug2Format))]
