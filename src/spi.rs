@@ -47,6 +47,17 @@ use crate::settings::{
     TxEventFifoConfiguration, TxQueueConfiguration,
 };
 
+/// Helper to round up SPI transfer sizes to align with 4-byte read/writes.
+/// Only rounds up when needed (e.g., 1-4 rounds up to 4, 5-8 rounds up to 8).
+fn round_up_spi_transfer_size(data_length: usize) -> usize {
+    if data_length % 4 == 0 {
+        data_length
+    } else {
+        // Add the number of bytes needed to round up to the next multiple of 4
+        data_length + (4 - data_length % 4)
+    }
+}
+
 #[derive(Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Error {
@@ -597,14 +608,8 @@ where
 
         let (length, bytes) = message.as_bytes();
 
-        // We need to make sure that the data we are writing to ram has a length
-        // which is a multiple of 4. By adding (4 - length % 4), we extend the
-        // length to the next multiple 4 boundary. This isn't always a good
-        // solution but in this specific case it works because we know that the
-        // there is definitely at least that much ram allocated for the TX
-        // message (we only do this when the DLC is < 8 and the minimum number
-        // of bytes allocated for a TX message is 8)
-        let data = &bytes[..length + (4 - length % 4)];
+        // The reading length has to be a multiple of 4 thus we round up the data_len
+        let data = &bytes[..round_up_spi_transfer_size(length)];
 
         self.write_ram(ram_address as u16, data).await?;
 
@@ -693,14 +698,8 @@ where
 
         let (length, bytes) = message.as_bytes();
 
-        // We need to make sure that the data we are writing to ram has a length
-        // which is a multiple of 4. By adding (4 - length % 4), we extend the
-        // length to the next multiple 4 boundary. This isn't always a good
-        // solution but in this specific case it works because we know that the
-        // there is definitely at least that much ram allocated for the TX
-        // message (we only do this when the DLC is < 8 and the minimum number
-        // of bytes allocated for a TX message is 8)
-        let data = &bytes[..length + (4 - length % 4)];
+        // The reading length has to be a multiple of 4 thus we round up the data_len
+        let data = &bytes[..round_up_spi_transfer_size(length)];
 
         self.write_ram(ram_address as u16, data).await?;
 
@@ -919,14 +918,8 @@ where
         let data_len = len_for_dlc(header.dlc(), header.fdf()).unwrap();
         let data_offset = if timestamp.is_some() { 3 } else { 2 };
 
-        // We need to make sure that the data we are reading from ram has a
-        // length which is a multiple of 4. By adding (4 - length % 4), we
-        // extend the length to the next multiple 4 boundary. This isn't always
-        // a good solution but in this specific case it works because we know
-        // that the there is definitely at least that much ram allocated for the
-        // RX message (we only do this when the DLC is < 8 and the minimum
-        // number of bytes allocated for a RX message is 8)
-        let read_len = data_len + (4 - data_len % 4);
+        // The reading length has to be a multiple of 4 thus we round up the data_len
+        let read_len = round_up_spi_transfer_size(data_len);
 
         self.read_ram(
             (ram_address + 4 * data_offset) as u16,
@@ -1222,4 +1215,23 @@ impl OpCode {
     pub const RESET: u16 = 0b0000 << 12;
     pub const READ: u16 = 0b0011 << 12;
     pub const WRITE: u16 = 0b0010 << 12;
+}
+
+#[cfg(test)]
+mod test {
+    use super::round_up_spi_transfer_size;
+
+    #[test]
+    fn test_round_up_spi_transfer_size() {
+        assert_eq!(round_up_spi_transfer_size(0), 0);
+        assert_eq!(round_up_spi_transfer_size(1), 4);
+        assert_eq!(round_up_spi_transfer_size(2), 4);
+        assert_eq!(round_up_spi_transfer_size(3), 4);
+        assert_eq!(round_up_spi_transfer_size(4), 4);
+        assert_eq!(round_up_spi_transfer_size(5), 8);
+        assert_eq!(round_up_spi_transfer_size(6), 8);
+        assert_eq!(round_up_spi_transfer_size(7), 8);
+        assert_eq!(round_up_spi_transfer_size(8), 8);
+        assert_eq!(round_up_spi_transfer_size(9), 12);
+    }
 }
