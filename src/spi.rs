@@ -192,6 +192,11 @@ where
                 ciint.set_eccie(true);
             }
 
+            // FIXME: expose a dedicated setting for this
+            if settings.enable_time_based_counter {
+                ciint.set_tbcie(true);
+            }
+
             ciint
         })
         .await?;
