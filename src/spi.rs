@@ -1130,15 +1130,15 @@ where
         let address = 0x400;
 
         let mut dword_data = [0u32; 32];
-        for i in 0..32 {
-            dword_data[i] = 1 << i;
+        for (i, d) in dword_data.iter_mut().enumerate() {
+            *d = 1 << i;
         }
 
         let mut data = [0u8; 32 * 4];
         for i in 0..32 {
             let bytes = dword_data[i].to_le_bytes();
 
-            data[i * 4 + 0] = bytes[0];
+            data[i * 4] = bytes[0];
             data[i * 4 + 1] = bytes[1];
             data[i * 4 + 2] = bytes[2];
             data[i * 4 + 3] = bytes[3];
