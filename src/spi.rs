@@ -522,9 +522,15 @@ where
                     Id::Extended(id) => {
                         object_register.set_sid(id.standard_id().as_raw());
                         object_register
-                            .set_eid(id.as_raw() & ((!StandardId::MAX.as_raw() as u32) >> 11));
+                            .set_eid(id.as_raw() & ((!(StandardId::MAX.as_raw() as u32)) >> 11));
                     }
                 }
+
+                // 0b000S_SSSS_SSSS_SSEE_EEEE_EEEE_EEEE_EEEE
+                //                     0b0000_0111_1111_1111
+                //                     0b1111_1000_0000_0000
+                // 0b0000_0000_0000_0000_1111_1000_0000_0000
+                // 0b0000_0000_0000_0000_0000_0000_0001_1111
 
                 object_register.set_exide(match filter_config.mode {
                     FilterMatchMode::StandardOnly | FilterMatchMode::Both => false,
@@ -546,7 +552,7 @@ where
                 Id::Extended(id) => {
                     mask_register.set_msid(id.standard_id().as_raw());
                     mask_register
-                        .set_meid(id.as_raw() & ((!StandardId::MAX.as_raw() as u32) >> 11));
+                        .set_meid(id.as_raw() & ((!(StandardId::MAX.as_raw() as u32)) >> 11));
                 }
             }
 
