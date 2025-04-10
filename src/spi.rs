@@ -633,6 +633,39 @@ where
         Ok(())
     }
 
+    /// Pushes to the TXQ without reading any status registers or performing
+    /// size checks. Callers of this function should be careful to check that
+    /// there is room in the TXQ. Otherwise, the oldest message will be
+    /// overriden.
+    pub async fn tx_queue_push_message_unchecked(
+        &mut self,
+        message: &TxMessage,
+    ) -> Result<(), Error> {
+        /* Write message to RAM */
+
+        let ram_address = self
+            .read_repeated_register::<UserAddressRegister>(UserAddressKind::TxQueue)
+            .await?
+            .calculate_ram_address();
+
+        let (length, bytes) = message.as_bytes();
+
+        // The reading length has to be a multiple of 4 thus we round up the data_len
+        let data = &bytes[..round_up_spi_transfer_size(length)];
+
+        self.write_ram(ram_address as u16, data).await?;
+
+        /* Increment tail pointer but do NOT request transmission */
+
+        self.modify_register(|mut txqcon: TxQueueControlRegister| {
+            txqcon.set_uinc();
+            txqcon
+        })
+        .await?;
+
+        Ok(())
+    }
+
     /// Requests transmission of all messages in the TXQ by setting the TXREQ
     /// bit.
     ///
