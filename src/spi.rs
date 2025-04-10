@@ -663,6 +663,20 @@ where
         Ok(())
     }
 
+    /// Fetches the status of the TXQ to determine whether it is empty
+    pub async fn tx_queue_is_empty(&mut self) -> Result<bool, Error> {
+        let status = self.read_register::<TxQueueStatusRegister>().await?;
+
+        Ok(status.txqeif())
+    }
+
+    /// Fetches the status of the TXQ to determine whether it is full
+    pub async fn tx_queue_is_full(&mut self) -> Result<bool, Error> {
+        let status = self.read_register::<TxQueueStatusRegister>().await?;
+
+        Ok(!status.txqnif())
+    }
+
     /// Pushes a new message into the given TX FIFO without setting the TXREQ
     /// bit to request transmission.
     ///
