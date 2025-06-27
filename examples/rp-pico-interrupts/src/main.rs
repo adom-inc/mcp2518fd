@@ -6,6 +6,7 @@ use core::cell::RefCell;
 use cortex_m::interrupt::Mutex;
 use defmt_rtt as _;
 use embedded_can::{ExtendedId, Id, StandardId};
+use embedded_hal_bus::spi::ExclusiveDevice;
 use mcp2518fd::{
     memory::controller::{
         configuration::OperationMode,
@@ -50,7 +51,8 @@ type CanSpiMisoPin = Pin<Gpio4, FunctionSpi, PullDown>;
 type CanSpiCsPin = Pin<Gpio5, FunctionSioOutput, PullDown>;
 
 type CanSpi = Spi<Enabled, SPI0, (CanSpiMosiPin, CanSpiMisoPin, CanSpiSclkPin)>;
-type CanDriver = MCP2518FD<CanSpi, CanSpiCsPin>;
+type CanSpiDevice = ExclusiveDevice<CanSpi, CanSpiCsPin, Timer>;
+type CanDriver = MCP2518FD<CanSpiDevice>;
 
 static GLOBAL_CAN_INT_PIN: Mutex<RefCell<Option<CanIntPin>>> = Mutex::new(RefCell::new(None));
 static GLOBAL_CAN_DRIVER: Mutex<RefCell<Option<CanDriver>>> = Mutex::new(RefCell::new(None));
@@ -92,16 +94,17 @@ fn main() -> ! {
     let spi_mosi = pins.gpio7.into_function::<FunctionSpi>();
     let spi_miso = pins.gpio4.into_function::<FunctionSpi>();
 
-    let spi_cs = pins.gpio5.into_push_pull_output();
-
-    let spi = Spi::<_, _, _, 8>::new(pac.SPI0, (spi_mosi, spi_miso, spi_sclk)).init(
+    let spi_bus = Spi::<_, _, _, 8>::new(pac.SPI0, (spi_mosi, spi_miso, spi_sclk)).init(
         &mut pac.RESETS,
         clocks.peripheral_clock.freq(),
         200_000.Hz(),
         embedded_hal::spi::MODE_0,
     );
+    let spi_cs = pins.gpio5.into_push_pull_output();
 
-    let mut can = MCP2518FD::new(spi, spi_cs);
+    let dev = ExclusiveDevice::new(spi_bus, spi_cs, timer).unwrap();
+
+    let mut can = MCP2518FD::new(dev);
 
     /* Configure CAN  */
 

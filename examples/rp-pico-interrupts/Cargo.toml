@@ -17,6 +17,7 @@ embedded-hal = { version = "1.0.0" }
 fugit = "0.3.6"
 panic-probe = { version = "0.3", features = ["print-defmt"] }
 rp-pico = "0.9"
+embedded-hal-bus = "0.3.0"
 
 # cargo build/run
 [profile.dev]

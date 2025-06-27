@@ -3,6 +3,7 @@
 
 use defmt_rtt as _;
 use embedded_can::{ExtendedId, Id, StandardId};
+use embedded_hal_bus::spi::ExclusiveDevice;
 use mcp2518fd::{
     memory::controller::{
         configuration::OperationMode,
@@ -73,16 +74,17 @@ fn main() -> ! {
     let spi_mosi = pins.gpio23.into_function::<FunctionSpi>();
     let spi_miso = pins.gpio20.into_function::<FunctionSpi>();
 
-    let spi_cs = pins.gpio21.into_push_pull_output();
-
-    let spi = Spi::<_, _, _, 8>::new(pac.SPI0, (spi_mosi, spi_miso, spi_sclk)).init(
+    let spi_bus = Spi::<_, _, _, 8>::new(pac.SPI0, (spi_mosi, spi_miso, spi_sclk)).init(
         &mut pac.RESETS,
         clocks.peripheral_clock.freq(),
         200_000.Hz(),
         embedded_hal::spi::MODE_0,
     );
+    let spi_cs = pins.gpio21.into_push_pull_output();
 
-    let mut can = MCP2518FD::new(spi, spi_cs);
+    let dev = ExclusiveDevice::new(spi_bus, spi_cs, timer).unwrap();
+
+    let mut can = MCP2518FD::new(dev);
 
     /* Configure CAN  */
 
