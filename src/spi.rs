@@ -808,6 +808,41 @@ where
         Ok(())
     }
 
+    /// Fetches the status of the TX FIFO to determine whether it is empty
+    pub async fn tx_fifo_is_empty(&mut self, fifo_number: FifoNumber) -> Result<bool, Error> {
+        let status = self
+            .read_repeated_register::<FifoStatusRegister>(fifo_number)
+            .await?;
+
+        Ok(status.tferffif())
+    }
+
+    /// Fetches the status of the TX FIFO to determine whether it is full
+    pub async fn tx_fifo_is_full(&mut self, fifo_number: FifoNumber) -> Result<bool, Error> {
+        let status = self
+            .read_repeated_register::<FifoStatusRegister>(fifo_number)
+            .await?;
+
+        Ok(!status.tfnrfnif())
+    }
+
+    /// Gets the value of TXAT for this FIFO and clears it
+    pub async fn tx_fifo_transmission_attempts_exhausted(
+        &mut self,
+        fifo_number: FifoNumber,
+    ) -> Result<bool, Error> {
+        let mut exhausted = false;
+
+        self.modify_repeated_register(fifo_number, |mut cififostam: FifoStatusRegister| {
+            exhausted = cififostam.txatif();
+            cififostam.clear_txatif();
+            cififostam
+        })
+        .await?;
+
+        Ok(exhausted)
+    }
+
     /// Checks to see if there are any messages in the TEF
     pub async fn tx_event_fifo_has_next(&mut self) -> Result<bool, Error> {
         let status_register = self.read_register::<TxEventFifoStatusRegister>().await?;
