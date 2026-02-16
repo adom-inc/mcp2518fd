@@ -203,14 +203,14 @@ impl_to_from_u32!(TransmitterDelayCompensationRegister);
 impl_register!(TransmitterDelayCompensationRegister, C1TDC);
 
 bitfield! {
-    pub struct TimeBasedCounterRegister(u32);
+    pub struct TimeBaseCounterRegister(u32);
     impl Debug;
     u32;
     pub tbc, set_tbc: 31, 0;
 }
 
-impl_to_from_u32!(TimeBasedCounterRegister);
-impl_register!(TimeBasedCounterRegister, C1TBC);
+impl_to_from_u32!(TimeBaseCounterRegister);
+impl_register!(TimeBaseCounterRegister, C1TBC);
 
 bitfield! {
     pub struct TimeStampControlRegister(u32);

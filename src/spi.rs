@@ -19,8 +19,8 @@ use futures::future::OptionFuture;
 use crate::memory::chip::{IoControlRegister, OscillatorControlRegister};
 use crate::memory::controller::configuration::{
     CanControlRegister, DataBitTimeConfigurationRegister, NominalBitTimeConfigurationRegister,
-    OperationMode, TimeStampControlRegister, TransmitterDelayCompensationMode,
-    TransmitterDelayCompensationRegister,
+    OperationMode, TimeBaseCounterRegister, TimeStampControlRegister,
+    TransmitterDelayCompensationMode, TransmitterDelayCompensationRegister,
 };
 use crate::memory::controller::fifo::{
     FifoControlRegister, FifoNumber, FifoStatusRegister, TxEventFifoControlRegister,
@@ -81,6 +81,8 @@ pub enum Error {
     FifoFull,
     /// Tried to read a message from a FIFO not configured for reception
     FifoNotRx,
+    /// The CRC from the chip did not match our calculated value for the data we received
+    CrcMismatch,
     Other,
 }
 
@@ -105,6 +107,7 @@ impl From<Error> for ConfigError {
 
 pub struct MCP2518FD<SPI> {
     spi: SPI,
+    crc: crc::Crc<u16>,
 }
 
 #[cfg_attr(not(feature = "async"), maybe_async::maybe_async)]
@@ -115,7 +118,12 @@ where
 {
     /// Constructs a new MCP2518FD controller from an SPI bus and CS GPIO pin
     pub fn new(spi: SPI) -> MCP2518FD<SPI> {
-        Self { spi }
+        Self {
+            spi,
+            // requires some somewhat expensive initialization, so keep a
+            // referenc to the Crc instance
+            crc: crc::Crc::<u16>::new(&crc::CRC_16_CMS),
+        }
     }
 
     /// Releases ownership of the SPI resources
@@ -1060,7 +1068,7 @@ where
     }
 
     pub async fn get_top_level_interrupt_statuses(&mut self) -> Result<InterruptRegister, Error> {
-        self.read_register::<InterruptRegister>().await
+        self.read_register_crc::<InterruptRegister>().await
     }
 
     pub async fn get_rx_interrupt_statuses(&mut self) -> Result<RxInterruptStatusRegister, Error> {
@@ -1083,6 +1091,15 @@ where
     ) -> Result<TxAttemptInterruptStatusRegister, Error> {
         self.read_register::<TxAttemptInterruptStatusRegister>()
             .await
+    }
+
+    pub async fn get_time_base_counter(&mut self) -> Result<u32, Error> {
+        // NOTE: Errata 1 in DS80000984A recomments to use READ_CRC for this
+        // register
+        Ok(self
+            .read_register_crc::<TimeBaseCounterRegister>()
+            .await?
+            .tbc())
     }
 
     /* Generic register ops with mapping */
@@ -1152,6 +1169,30 @@ where
         self.write_sfr(&address, value.into()).await
     }
 
+    pub async fn read_register_crc<R>(&mut self) -> Result<R, Error>
+    where
+        R: Register + From<u32>,
+    {
+        let address = R::get_address();
+
+        let mut attempts = 0;
+
+        loop {
+            if attempts == 3 {
+                return Err(Error::CrcMismatch);
+            }
+
+            match self.read_sfr_crc(&address).await.map(R::from) {
+                Ok(r) => return Ok(r),
+                Err(Error::CrcMismatch) => {
+                    attempts += 1;
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
     /* Raw SFR Ops (Minimal type checking) */
 
     async fn read_sfr(&mut self, address: &SFRAddress) -> Result<u32, Error> {
@@ -1186,6 +1227,36 @@ where
             .map_err(|_| Error::SPIRead)?;
 
         Ok(())
+    }
+
+    async fn read_sfr_crc(&mut self, address: &SFRAddress) -> Result<u32, Error> {
+        let mut instruction = Instruction(OpCode::READ_CRC);
+        instruction.set_address(*address as u16);
+        let instr = instruction.into_spi_data();
+
+        let tx_buf = [
+            instr[0], instr[1], // command + address
+            4,        // num data bytes before CRC
+        ];
+        let mut rx_buf = [0u8; 6]; // 4 data + 2 crc
+
+        self.spi
+            .transaction(&mut [Operation::Write(&tx_buf), Operation::Read(&mut rx_buf)])
+            .await
+            .map_err(|_| Error::SPIRead)?;
+
+        let rx_data = u32::from_le_bytes([rx_buf[0], rx_buf[1], rx_buf[2], rx_buf[3]]);
+        let rx_crc = u16::from_be_bytes([rx_buf[4], rx_buf[5]]);
+
+        let mut digest = self.crc.digest();
+        digest.update(&tx_buf);
+        digest.update(&rx_buf[..4]);
+
+        if digest.finalize() != rx_crc {
+            return Err(Error::CrcMismatch);
+        }
+
+        Ok(rx_data)
     }
 
     /* RAM related functions */
@@ -1308,6 +1379,8 @@ impl OpCode {
     pub const RESET: u16 = 0b0000 << 12;
     pub const READ: u16 = 0b0011 << 12;
     pub const WRITE: u16 = 0b0010 << 12;
+    pub const READ_CRC: u16 = 0b1011 << 12;
+    pub const WRITE_CRC: u16 = 01010 << 12;
 }
 
 #[cfg(test)]
