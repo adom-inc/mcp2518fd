@@ -187,7 +187,7 @@ pub enum PayloadSize {
 }
 
 impl PayloadSize {
-    pub fn num_bytes(&self) -> usize {
+    pub const fn num_bytes(&self) -> usize {
         match self {
             Self::Bytes8 => 8,
             Self::Bytes12 => 12,
