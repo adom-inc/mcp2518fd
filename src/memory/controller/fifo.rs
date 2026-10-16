@@ -196,7 +196,7 @@ impl PayloadSize {
             Self::Bytes24 => 24,
             Self::Bytes32 => 32,
             Self::Bytes48 => 48,
-            Self::Bytes64 => 65,
+            Self::Bytes64 => 64,
         }
     }
 }
