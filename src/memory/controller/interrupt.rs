@@ -166,6 +166,38 @@ impl InterruptRegister {
 impl_to_from_u32!(InterruptRegister);
 impl_register!(InterruptRegister, C1INT);
 
+/// The software clearable (HS/C) flags of C1INT, for
+/// [`MCP2518FD::clear_interrupt_flags`](crate::MCP2518FD::clear_interrupt_flags).
+/// The other flags in C1INT are read only: they are cleared where they come
+/// from (the FIFO status, CRC and ECC registers).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct ClearableInterruptFlags(u16);
+
+impl ClearableInterruptFlags {
+    pub const TBCIF: Self = Self(1 << 2);
+    pub const MODIF: Self = Self(1 << 3);
+    pub const SERRIF: Self = Self(1 << 12);
+    pub const CERRIF: Self = Self(1 << 13);
+    pub const WAKIF: Self = Self(1 << 14);
+    pub const IVMIF: Self = Self(1 << 15);
+
+    /// The value to write to the flag half of C1INT (bits 0 to 15) to clear
+    /// these flags. Writing 0 clears an HS/C flag and writing 1 leaves it
+    /// alone, and writes to the read only flags have no effect.
+    pub const fn clear_value(self) -> u16 {
+        !self.0
+    }
+}
+
+impl core::ops::BitOr for ClearableInterruptFlags {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self {
+        Self(self.0 | rhs.0)
+    }
+}
+
 bitfield! {
     pub struct RxInterruptStatusRegister(u32);
     impl Debug;
@@ -359,3 +391,37 @@ impl TxAttemptInterruptStatusRegister {
 
 impl_to_from_u32!(TxAttemptInterruptStatusRegister);
 impl_register!(TxAttemptInterruptStatusRegister, C1TXATIF);
+
+#[cfg(test)]
+mod test {
+    use super::{ClearableInterruptFlags, InterruptRegister};
+
+    #[test]
+    fn test_clearable_interrupt_flags_match_register_bits() {
+        let all = ClearableInterruptFlags::TBCIF
+            | ClearableInterruptFlags::MODIF
+            | ClearableInterruptFlags::SERRIF
+            | ClearableInterruptFlags::CERRIF
+            | ClearableInterruptFlags::WAKIF
+            | ClearableInterruptFlags::IVMIF;
+
+        let mut register = InterruptRegister(0xFFFF_FFFF);
+        register.clear_tbcif();
+        register.clear_modif();
+        register.clear_serrif();
+        register.clear_cerrif();
+        register.clear_wakif();
+        register.clear_ivmif();
+
+        assert_eq!(all.clear_value(), register.0 as u16);
+    }
+
+    #[test]
+    fn test_clear_value_only_clears_the_given_flags() {
+        assert_eq!(ClearableInterruptFlags::TBCIF.clear_value(), 0xFFFB);
+        assert_eq!(
+            (ClearableInterruptFlags::IVMIF | ClearableInterruptFlags::CERRIF).clear_value(),
+            0x5FFF
+        );
+    }
+}

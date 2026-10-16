@@ -31,7 +31,7 @@ use crate::memory::controller::filter::{
     FilterControlRegister, FilterNumber, FilterObjectRegister, MaskRegister,
 };
 use crate::memory::controller::interrupt::{
-    InterruptCodeRegister, InterruptRegister, RxInterruptStatusRegister,
+    ClearableInterruptFlags, InterruptCodeRegister, InterruptRegister, RxInterruptStatusRegister,
     RxOverflowInterruptStatusRegister, TxAttemptInterruptStatusRegister, TxInterruptStatusRegister,
 };
 use crate::memory::{is_valid_ram_address, Register, RepeatedRegister, SFRAddress};
@@ -1093,6 +1093,19 @@ where
             .await
     }
 
+    /// Clears software clearable flags in C1INT. Only the flag half of the
+    /// register is written, with 0 for the flags to clear and 1 everywhere
+    /// else, so unlike a read-modify-write this can't lose a flag the
+    /// hardware sets in the meantime, and it leaves the enable bits alone.
+    pub async fn clear_interrupt_flags(
+        &mut self,
+        flags: ClearableInterruptFlags,
+    ) -> Result<(), Error> {
+        // SFR writes are byte addressed, and the flags are the low two bytes
+        self.write_sfr_bytes(SFRAddress::C1INT, &flags.clear_value().to_le_bytes())
+            .await
+    }
+
     pub async fn get_time_base_counter(&mut self) -> Result<u32, Error> {
         // NOTE: Errata 1 in DS80000984A recomments to use READ_CRC for this
         // register
@@ -1225,6 +1238,23 @@ where
             ])
             .await
             .map_err(|_| Error::SPIRead)?;
+
+        Ok(())
+    }
+
+    /// Writes `data` to consecutive SFR bytes starting at `address`, leaving
+    /// the rest of the register untouched
+    async fn write_sfr_bytes(&mut self, address: SFRAddress, data: &[u8]) -> Result<(), Error> {
+        let mut instruction = Instruction(OpCode::WRITE);
+        instruction.set_address(address as u16);
+
+        self.spi
+            .transaction(&mut [
+                Operation::Write(&instruction.into_spi_data()),
+                Operation::Write(data),
+            ])
+            .await
+            .map_err(|_| Error::SPIWrite)?;
 
         Ok(())
     }
